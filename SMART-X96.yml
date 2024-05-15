@@ -1,252 +1,252 @@
 Voltage Phase 1 :
- - 1 # Adress dec data
+ - 0 # Adress dec data
  - 2 # Length word
  - 1 # Data Type. 1=Float(ABCD), 2=Long(ABCD), 3=Integer, 4=Long(CDAB), 5=Word (Unsigned Int), 6=Dword (Unsigned Long)
 Voltage Phase 2 :
- - 3
+ - 2
  - 2
  - 1
 Voltage Phase 3 :
- - 5
+ - 4
  - 2
  - 1
 Voltage Phase 1-2 :
- - 201
+ - 200
  - 2
  - 1
 Voltage Phase 2-3 :
- - 203
+ - 202
  - 2
  - 1
 Voltage Phase 3-1 :
- - 205
+ - 204
  - 2
  - 1
 Current Phase 1 :
- - 7
+ - 6
  - 2
  - 1
 Current Phase 2 :
- - 9
+ - 8
  - 2
  - 1
 Current Phase 3 :
- - 11
+ - 10
  - 2
  - 1
 Neutral Current :
- - 225
+ - 224
  - 2
  - 1
 Active power Phase 1 :
- - 13
+ - 12
  - 2
  - 1
 Active power Phase 2 :
- - 15
+ - 14
  - 2
  - 1
 Active power Phase 3 :
- - 17
+ - 16
  - 2
  - 1
 Total Active power :
- - 53
+ - 52
  - 2
  - 1
 Reactive power Phase 1 :
- - 25
+ - 24
  - 2
  - 1
 Reactive power Phase 2 :
- - 27
+ - 26
  - 2
  - 1
 Reactive power Phase 3 :
- - 29
+ - 28
  - 2
  - 1
 Total Reactive power :
- - 61
+ - 60
  - 2
  - 1
 Apparent power Phase 1 :
- - 19
+ - 18
  - 2
  - 1
 Apparent power Phase 2 :
- - 21
+ - 20
  - 2
  - 1
 Apparent power Phase 3 :
- - 23
+ - 22
  - 2
  - 1
 Total Apparent power :
- - 57
+ - 56
  - 2
  - 1
 Power factor Phase 1 :
- - 31
+ - 30
  - 2
  - 1
 Power factor Phase 2 :
- - 33
+ - 32
  - 2
  - 1
 Power factor Phase 3 :
- - 35
+ - 34
  - 2
  - 1
 Frequency :
- - 71
+ - 70
  - 2
  - 1
 Import active energy :
- - 73
+ - 72
  - 2
  - 1
 Export active energy :
- - 75
+ - 74
  - 2
  - 1
 Inductive reactive energy :
- - 77
+ - 76
  - 2
  - 1
 Capacitive reactive energy :
- - 79
+ - 78
  - 2
  - 1
 Voltage Phase 1 THD :
- - 235
+ - 234
  - 2
  - 1
 Voltage Phase 2 THD :
- - 237
+ - 236
  - 2
  - 1
 Voltage Phase 3 THD :
- - 239
+ - 238
  - 2
  - 1
 Voltage Phase 1-2 THD :
- - 335
+ - 334
  - 2
  - 1
 Voltage Phase 2-3 THD :
- - 337
+ - 336
  - 2
  - 1
 Voltage Phase 3-1 THD :
- - 339
+ - 338
  - 2
  - 1
 Current Phase 1 THD :
- - 241
+ - 240
  - 2
  - 1
 Current Phase 2 THD :
- - 243
+ - 242
  - 2
  - 1
 Current Phase 3 THD :
- - 245
+ - 244
  - 2
  - 1
 Voltage Harmonic 3 L1 :
- - 405
+ - 404
  - 2
  - 1
 Voltage Harmonic 5 L1 :
- - 409
+ - 408
  - 2
  - 1
 Voltage Harmonic 7 L1 :
- - 413
+ - 412
  - 2
  - 1
 Voltage Harmonic 9 L1 :
- - 417
+ - 416
  - 2
  - 1
 Voltage Harmonic 3 L2 :
- - 529
+ - 528
  - 2
  - 1
 Voltage Harmonic 5 L2 :
- - 533
+ - 532
  - 2
  - 1
 Voltage Harmonic 7 L2 :
- - 537
+ - 536
  - 2
  - 1
 Voltage Harmonic 9 L2 :
- - 541
+ - 540
  - 2
  - 1
 Voltage Harmonic 3 L3 :
- - 653
+ - 652
  - 2
  - 1
 Voltage Harmonic 5 L3 :
- - 657
+ - 656
  - 2
  - 1
 Voltage Harmonic 7 L3 :
- - 661
+ - 660
  - 2
  - 1
 Voltage Harmonic 9 L3 :
- - 665
+ - 664
  - 2
  - 1
 Current Harmonic 3 L1 :
- - 777
+ - 776
  - 2
  - 1
 Current Harmonic 5 L1 :
- - 781
+ - 780
  - 2
  - 1
 Current Harmonic 7 L1 :
- - 785
+ - 784
  - 2
  - 1
 Current Harmonic 9 L1 :
- - 789
+ - 788
  - 2
  - 1
 Current Harmonic 3 L2 :
- - 901
+ - 900
  - 2
  - 1
 Current Harmonic 5 L2 :
- - 905
+ - 904
  - 2
  - 1
 Current Harmonic 7 L2 :
- - 909
+ - 908
  - 2
  - 1
 Current Harmonic 9 L2 :
- - 913
+ - 912
  - 2
  - 1
 Current Harmonic 3 L3 :
- - 1025
+ - 1024
  - 2
  - 1
 Current Harmonic 5 L3 :
- - 1029
+ - 1028
  - 2
  - 1
 Current Harmonic 7 L3 :
- - 1033
+ - 1032
  - 2
  - 1
 Current Harmonic 9 L3 :
- - 1037
+ - 1036
  - 2
  - 1

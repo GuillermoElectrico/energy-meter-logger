@@ -13,6 +13,7 @@ import modbus_tk
 import modbus_tk.defines as cst
 from modbus_tk import modbus_rtu
 from modbus_tk import modbus_tcp
+import struct
 
 PORT = 'COM3'
 #PORT = '/dev/ttyUSB0'
@@ -100,7 +101,7 @@ class DataCollector:
 
                     for parameter in parameters:
                         # If random readout errors occour, e.g. CRC check fail, test to uncomment the following row
-                        time.sleep(0.15) # Sleep for 150 ms between each parameter read to avoid errors
+                        time.sleep(0.2) # Sleep for 150 ms between each parameter read to avoid errors
                         retries = 3
                         while retries > 0:
                             try:
@@ -120,6 +121,10 @@ class DataCollector:
                                         resultado = masterRTU.execute(meter['id'], cst.READ_HOLDING_REGISTERS, parameters[parameter][0], parameters[parameter][1], data_format='>I')
                                     elif parameters[parameter][2] == 6:
                                         resultado = masterRTU.execute(meter['id'], cst.READ_HOLDING_REGISTERS, parameters[parameter][0], parameters[parameter][1], data_format='>L')
+                                    elif parameters[parameter][2] == 7:
+                                        resultadoTemp = masterRTU.execute(meter['id'], cst.READ_HOLDING_REGISTERS, parameters[parameter][0], parameters[parameter][1])
+                                        resultado = [0,0]
+                                        resultado[0] = struct.unpack('f', struct.pack('I', (resultadoTemp[1]<<16)|resultadoTemp[0]))[0]
                                 elif meter['function'] == 4:
                                     if parameters[parameter][2] == 1:
                                         resultado = masterRTU.execute(meter['id'], cst.READ_INPUT_REGISTERS, parameters[parameter][0], parameters[parameter][1], data_format='>f')
@@ -135,6 +140,10 @@ class DataCollector:
                                         resultado = masterRTU.execute(meter['id'], cst.READ_INPUT_REGISTERS, parameters[parameter][0], parameters[parameter][1], data_format='>I')
                                     elif parameters[parameter][2] == 6:
                                         resultado = masterRTU.execute(meter['id'], cst.READ_INPUT_REGISTERS, parameters[parameter][0], parameters[parameter][1], data_format='>L')
+                                    elif parameters[parameter][2] == 7:
+                                        resultadoTemp = masterRTU.execute(meter['id'], cst.READ_INPUT_REGISTERS, parameters[parameter][0], parameters[parameter][1])
+                                        resultado = [0,0]
+                                        resultado[0] = struct.unpack('f', struct.pack('I', (resultadoTemp[1]<<16)|resultadoTemp[0]))[0]
                                 datas[list][parameter] = resultado[0]
                                 retries = 0
                                 pass
@@ -174,7 +183,7 @@ class DataCollector:
 
                     for parameter in parameters:
                         # If random readout errors occour, e.g. CRC check fail, test to uncomment the following row
-                        time.sleep(0.15) # Sleep for 150 ms between each parameter read to avoid errors
+                        time.sleep(0.2) # Sleep for 150 ms between each parameter read to avoid errors
                         retries = 3
                         while retries > 0:
                             try:
@@ -194,6 +203,10 @@ class DataCollector:
                                         resultado = masterTCP.execute(meter['id'], cst.READ_HOLDING_REGISTERS, parameters[parameter][0], parameters[parameter][1], data_format='>I')
                                     elif parameters[parameter][2] == 6:
                                         resultado = masterTCP.execute(meter['id'], cst.READ_HOLDING_REGISTERS, parameters[parameter][0], parameters[parameter][1], data_format='>L')
+                                    elif parameters[parameter][2] == 7:
+                                        resultadoTemp = masterRTU.execute(meter['id'], cst.READ_HOLDING_REGISTERS, parameters[parameter][0], parameters[parameter][1])
+                                        resultado = [0,0]
+                                        resultado[0] = struct.unpack('f', struct.pack('I', (resultadoTemp[1]<<16)|resultadoTemp[0]))[0]
                                 elif meter['function'] == 4:
                                     if parameters[parameter][2] == 1:
                                         resultado = masterTCP.execute(meter['id'], cst.READ_INPUT_REGISTERS, parameters[parameter][0], parameters[parameter][1], data_format='>f')
@@ -209,6 +222,10 @@ class DataCollector:
                                         resultado = masterTCP.execute(meter['id'], cst.READ_INPUT_REGISTERS, parameters[parameter][0], parameters[parameter][1], data_format='>I')
                                     elif parameters[parameter][2] == 6:
                                         resultado = masterTCP.execute(meter['id'], cst.READ_INPUT_REGISTERS, parameters[parameter][0], parameters[parameter][1], data_format='>L')
+                                    elif parameters[parameter][2] == 7:
+                                        resultadoTemp = masterRTU.execute(meter['id'], cst.READ_INPUT_REGISTERS, parameters[parameter][0], parameters[parameter][1])
+                                        resultado = [0,0]
+                                        resultado[0] = struct.unpack('f', struct.pack('I', (resultadoTemp[1]<<16)|resultadoTemp[0]))[0]
                                 datas[list][parameter] = resultado[0]
                                 retries = 0
                                 pass
@@ -245,7 +262,7 @@ class DataCollector:
                 'measurement': meter_id_name[meter_id],
                 'tags': {
                     'id': meter_slave_id[meter_id],
-#                    'meter': meter_id_name[meter_id],
+                    'meter': meter_id_name[meter_id],
                 },
                 'time': t_str,
                 'fields': datas[meter_id]
