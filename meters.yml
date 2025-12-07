@@ -97,3 +97,11 @@ meters:
       stopbits : 2
       timeout  : 0.5   # seconds
       function : 4    # 3 = Read Holding register (40000) or 4 = Read Input register (30000) 
+    - name : Meter Group 10
+      type : ShellyPro3EM.yml
+      conexion: T  # R = RTU 232/485 | T = TCP IPv4
+      id : 1     # this is the slave address number
+      direction : 192.168.0.123   # IPv4 destination address
+      port : 502  # destination port
+      timeout  : 5.0   # seconds
+      function : 4    # 3 = Read Holding register (40000) or 4 = Read Input register (30000) 
