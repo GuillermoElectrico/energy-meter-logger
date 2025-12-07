@@ -11,265 +11,142 @@ import yaml
 import logging
 import modbus_tk
 import modbus_tk.defines as cst
-from modbus_tk import modbus_rtu
-from modbus_tk import modbus_tcp
+from modbus_tk import modbus_rtu, modbus_tcp
 import struct
 
-PORT = 'COM3'
-#PORT = '/dev/ttyUSB0'
-#PORT = '/dev/serial/by-id/usb-1a86_USB2.0-Serial-if00-port0'
+PORT = 'COM3'          # ← change to your real port if needed
+# PORT = '/dev/ttyUSB0'
 
-# Change working dir to the same dir as this script
 os.chdir(sys.path[0])
+
+log = logging.getLogger('energy-logger')
 
 class DataCollector:
     def __init__(self, influx_yaml, meter_yaml):
         self.influx_yaml = influx_yaml
         self.influx_map = None
         self.influx_map_last_change = -1
-        self.influx_inteval_save = dict()
-        log.info('InfluxDB:')
-        for influx_config in sorted(self.get_influxdb(), key=lambda x:sorted(x.keys())):
-            log.info('\t {} <--> {} , Interval: {}'.format(influx_config['host'], influx_config['name'], influx_config['interval']))
+        self.influx_interval_save = {}
         self.meter_yaml = meter_yaml
-        self.max_iterations = None  # run indefinitely by default
         self.meter_map = None
         self.meter_map_last_change = -1
+            
+        log.info('InfluxDB configurations:')
+        for cfg in self.get_influxdb():
+            log.info(f"  • {cfg['name']} → {cfg['host']} (every {cfg['interval']} cycles)")
+
         log.info('Meters:')
-        for meter in sorted(self.get_meters(), key=lambda x:sorted(x.keys())):
-            log.info('\t {} <--> {}'.format( meter['id'], meter['name']))
+        for m in self.get_meters():
+            log.info(f"  • ID {m['id']:>3} → {m['name']} ({'TCP' if m.get('conexion')=='T' else 'RTU'})")
 
     def get_meters(self):
-        assert path.exists(self.meter_yaml), 'Meter map not found: %s' % self.meter_yaml
+        if not path.exists(self.meter_yaml):
+            log.error(f'Meter file not found: {self.meter_yaml}')
+            sys.exit(1)
         if path.getmtime(self.meter_yaml) != self.meter_map_last_change:
-            try:
-                log.info('Reloading meter map as file changed')
-                new_map = yaml.load(open(self.meter_yaml), Loader=yaml.FullLoader)
-                self.meter_map = new_map['meters']
+            with open(self.meter_yaml) as f:
+                self.meter_map = yaml.load(f, Loader=yaml.FullLoader)['meters']
                 self.meter_map_last_change = path.getmtime(self.meter_yaml)
-            except Exception as e:
-                log.warning('Failed to re-load meter map, going on with the old one.')
-                log.warning(e)
+                log.info('Meter map reloaded')
         return self.meter_map
 
     def get_influxdb(self):
-        assert path.exists(self.influx_yaml), 'InfluxDB map not found: %s' % self.influx_yaml
+        if not path.exists(self.influx_yaml):
+            log.error(f'Influx config not found: {self.influx_yaml}')
+            sys.exit(1)
         if path.getmtime(self.influx_yaml) != self.influx_map_last_change:
-            try:
-                log.info('Reloading influxDB map as file changed')
-                new_map = yaml.load(open(self.influx_yaml), Loader=yaml.FullLoader)
-                self.influx_map = new_map['influxdb']
+            with open(self.influx_yaml) as f:
+                self.influx_map = yaml.load(f, Loader=yaml.FullLoader)['influxdb']
                 self.influx_map_last_change = path.getmtime(self.influx_yaml)
-                list = 0
-                for influx_config in sorted(self.get_influxdb(), key=lambda x:sorted(x.keys())):
-                    list = list + 1
-                    self.influx_inteval_save[list] = influx_config['interval']
-            except Exception as e:
-                log.warning('Failed to re-load influxDB map, going on with the old one.')
-                log.warning(e)
+                self.influx_interval_save = {i+1: cfg['interval'] for i, cfg in enumerate(self.influx_map)}
+                log.info('InfluxDB config reloaded')
         return self.influx_map
+        
+    def safe_read_registers(self, master, slave_id, func_code, start_addr, count, dtype):
+        """Read registers safely – returns value or None if meter does not answer."""
+        for attempt in range(3):
+            try:
+                raw = master.execute(slave_id, func_code, start_addr, count)
+
+                if dtype == 1:      # float big-endian
+                    return struct.unpack('>f', struct.pack('>HH', raw[0], raw[1]))[0]
+                if dtype == 2:      # signed 32-bit
+                    return struct.unpack('>l', struct.pack('>HH', raw[0], raw[1]))[0]
+                if dtype == 3:      # raw registers
+                    return raw[0] if len(raw) == 1 else list(raw)
+                if dtype == 4:      # swapped word order 32-bit
+                    return (raw[1] << 16) | raw[0]
+                if dtype == 5:      # unsigned 32-bit
+                    return struct.unpack('>I', struct.pack('>HH', raw[0], raw[1]))[0]
+                if dtype == 6:      # unsigned 64-bit (4 registers)
+                    return struct.unpack('>Q', struct.pack('>HHHH', *raw))[0]   # ← fixed line
+                return raw[0]   # fallback
+            except Exception as e:
+                if attempt == 2:
+                    log.debug(f"Meter ID {slave_id} addr {start_addr}: {e}")
+                time.sleep(0.08)
+        return None
+
 
     def collect_and_store(self):
         meters = self.get_meters()
-        influxdb = self.get_influxdb()
-        t_utc = datetime.utcnow()
-        t_str = t_utc.isoformat() + 'Z'
+        influx_cfgs = self.get_influxdb()
+        t_utc = datetime.utcnow().isoformat() + 'Z'
 
-        datas = dict()
-        meter_id_name = dict() # mapping id to name
-        meter_slave_id = dict()
-        list = 0 # mapping list to id
+        datas = {}
+        meter_id_name = {}
+        meter_slave_id = {}
+        idx = 0
 
         for meter in meters:
-            list = list + 1
-            meter_id_name[list] = meter['name']
-            meter_slave_id[list] = meter['id']
+            idx += 1
+            meter_id_name[idx] = meter['name']
+            meter_slave_id[idx] = meter['id']
 
             try:
-                if meter['conexion'] == 'R':
-                    masterRTU = modbus_rtu.RtuMaster(
-                        serial.Serial(port=PORT, baudrate=meter['baudrate'], bytesize=meter['bytesize'], parity=meter['parity'], stopbits=meter['stopbits'], xonxoff=0)
+                # Create master (RTU or TCP)
+                if meter.get('conexion') == 'R':
+                    ser = serial.Serial(
+                        port=PORT,
+                        baudrate=meter['baudrate'],
+                        bytesize=meter['bytesize'],
+                        parity=meter['parity'],
+                        stopbits=meter['stopbits'],
+                        timeout=1
                     )
+                    master = modbus_rtu.RtuMaster(ser)
+                elif meter.get('conexion') == 'T':
+                    master = modbus_tcp.TcpMaster(host=meter['direction'], port=meter.get('port', 502))
+                else:
+                    log.warning(f"Unknown conexion {meter.get('conexion')} for {meter['name']}")
+                    continue
 
-                    masterRTU.set_timeout(meter['timeout'])
-                    masterRTU.set_verbose(True)
+                master.set_timeout(meter.get('timeout', 2.0))
 
-                    log.debug('Reading meter %s.' % (meter['name']))
-                    start_time = time.time()
-                    parameters = yaml.load(open(meter['type']), Loader=yaml.FullLoader)
-                    datas[list] = dict()
+                log.debug(f"Reading {meter['name']} (ID {meter['id']})")
+                start_time = time.time()
 
-                    for parameter in parameters:
-                        # If random readout errors occour, e.g. CRC check fail, test to uncomment the following row
-                        time.sleep(0.2) # Sleep for 150 ms between each parameter read to avoid errors
-                        retries = 3
-                        while retries > 0:
-                            try:
-                                retries -= 1
-                                if meter['function'] == 3:
-                                    if parameters[parameter][2] == 1:
-                                        resultado = masterRTU.execute(meter['id'], cst.READ_HOLDING_REGISTERS, parameters[parameter][0], parameters[parameter][1], data_format='>f')
-                                    elif parameters[parameter][2] == 2:
-                                        resultado = masterRTU.execute(meter['id'], cst.READ_HOLDING_REGISTERS, parameters[parameter][0], parameters[parameter][1], data_format='>l')
-                                    elif parameters[parameter][2] == 3:
-                                        resultado = masterRTU.execute(meter['id'], cst.READ_HOLDING_REGISTERS, parameters[parameter][0], parameters[parameter][1])
-                                    elif parameters[parameter][2] == 4:
-                                        resultadoTemp = masterRTU.execute(meter['id'], cst.READ_HOLDING_REGISTERS, parameters[parameter][0], parameters[parameter][1])
-                                        resultado = [0,0]
-                                        resultado[0] = (resultadoTemp[1]<<16)|resultadoTemp[0]
-                                    elif parameters[parameter][2] == 5:
-                                        resultado = masterRTU.execute(meter['id'], cst.READ_HOLDING_REGISTERS, parameters[parameter][0], parameters[parameter][1], data_format='>I')
-                                    elif parameters[parameter][2] == 6:
-                                        resultado = masterRTU.execute(meter['id'], cst.READ_HOLDING_REGISTERS, parameters[parameter][0], parameters[parameter][1], data_format='>L')
-                                    elif parameters[parameter][2] == 7:
-                                        resultadoTemp = masterRTU.execute(meter['id'], cst.READ_HOLDING_REGISTERS, parameters[parameter][0], parameters[parameter][1])
-                                        resultado = [0,0]
-                                        resultado[0] = struct.unpack('f', struct.pack('I', (resultadoTemp[1]<<16)|resultadoTemp[0]))[0]
-                                elif meter['function'] == 4:
-                                    if parameters[parameter][2] == 1:
-                                        resultado = masterRTU.execute(meter['id'], cst.READ_INPUT_REGISTERS, parameters[parameter][0], parameters[parameter][1], data_format='>f')
-                                    elif parameters[parameter][2] == 2:
-                                        resultado = masterRTU.execute(meter['id'], cst.READ_INPUT_REGISTERS, parameters[parameter][0], parameters[parameter][1], data_format='>l')
-                                    elif parameters[parameter][2] == 3:
-                                        resultado = masterRTU.execute(meter['id'], cst.READ_INPUT_REGISTERS, parameters[parameter][0], parameters[parameter][1])
-                                    elif parameters[parameter][2] == 4:
-                                        resultadoTemp = masterRTU.execute(meter['id'], cst.READ_INPUT_REGISTERS, parameters[parameter][0], parameters[parameter][1])
-                                        resultado = [0,0]
-                                        resultado[0] = (resultadoTemp[1]<<16)|resultadoTemp[0]
-                                    elif parameters[parameter][2] == 5:
-                                        resultado = masterRTU.execute(meter['id'], cst.READ_INPUT_REGISTERS, parameters[parameter][0], parameters[parameter][1], data_format='>I')
-                                    elif parameters[parameter][2] == 6:
-                                        resultado = masterRTU.execute(meter['id'], cst.READ_INPUT_REGISTERS, parameters[parameter][0], parameters[parameter][1], data_format='>L')
-                                    elif parameters[parameter][2] == 7:
-                                        resultadoTemp = masterRTU.execute(meter['id'], cst.READ_INPUT_REGISTERS, parameters[parameter][0], parameters[parameter][1])
-                                        resultado = [0,0]
-                                        resultado[0] = struct.unpack('f', struct.pack('I', (resultadoTemp[1]<<16)|resultadoTemp[0]))[0]
-                                datas[list][parameter] = resultado[0]
-                                retries = 0
-                                pass
-                            except ValueError as ve:
-                                log.warning('Value Error while reading register {} from meter {}. Retries left {}.'
-                                       .format(parameters[parameter], meter['id'], retries))
-                                log.error(ve)
-#                                if retries == 0:
-#                                    raise RuntimeError
-                            except TypeError as te:
-                                log.warning('Type Error while reading register {} from meter {}. Retries left {}.'
-                                       .format(parameters[parameter], meter['id'], retries))
-                                log.error(te)
-#                                if retries == 0:
-#                                    raise RuntimeError
-                            except IOError as ie:
-                                log.warning('IO Error while reading register {} from meter {}. Retries left {}.'
-                                       .format(parameters[parameter], meter['id'], retries))
-                                log.error(ie)
-#                                if retries == 0:
-#                                    raise RuntimeError
-                            except:
-                                log.error("Unexpected error:", sys.exc_info()[0])
-#                                raise
+                with open(meter['type']) as f:
+                    parameters = yaml.load(f, Loader=yaml.FullLoader)
 
-                    datas[list]['ReadTime'] =  time.time() - start_time
-                    del masterRTU;
-                elif meter['conexion'] == 'T':
-                    masterTCP = modbus_tcp.TcpMaster(host=meter['direction'],port=meter['port'])
+                datas[idx] = {'ReadTime': 0.0}
+                func_code = cst.READ_HOLDING_REGISTERS if meter['function'] == 3 else cst.READ_INPUT_REGISTERS
 
-                    masterTCP.set_timeout(meter['timeout'])
+                for param_name, param_def in parameters.items():
+                    time.sleep(0.15)
+                    value = self.safe_read_registers(
+                        master, meter['id'], func_code,
+                        param_def[0], param_def[1], param_def[2]
+                    )
+                    datas[idx][param_name] = value
 
-                    log.debug('Reading meter %s.' % (meter['name']))
-                    start_time = time.time()
-                    parameters = yaml.load(open(meter['type']), Loader=yaml.FullLoader)
-                    datas[list] = dict()
+                datas[idx]['ReadTime'] = time.time() - start_time
+                master._do_close()
 
-                    for parameter in parameters:
-                        # If random readout errors occour, e.g. CRC check fail, test to uncomment the following row
-                        time.sleep(0.2) # Sleep for 150 ms between each parameter read to avoid errors
-                        retries = 3
-                        while retries > 0:
-                            try:
-                                retries -= 1
-                                if meter['function'] == 3:
-                                    if parameters[parameter][2] == 1:
-                                        resultado = masterTCP.execute(meter['id'], cst.READ_HOLDING_REGISTERS, parameters[parameter][0], parameters[parameter][1], data_format='>f')
-                                    elif parameters[parameter][2] == 2:
-                                        resultado = masterTCP.execute(meter['id'], cst.READ_HOLDING_REGISTERS, parameters[parameter][0], parameters[parameter][1], data_format='>l')
-                                    elif parameters[parameter][2] == 3:
-                                        resultado = masterTCP.execute(meter['id'], cst.READ_HOLDING_REGISTERS, parameters[parameter][0], parameters[parameter][1])
-                                    elif parameters[parameter][2] == 4:
-                                        resultadoTemp = masterTCP.execute(meter['id'], cst.READ_HOLDING_REGISTERS, parameters[parameter][0], parameters[parameter][1])
-                                        resultado = [0,0]
-                                        resultado[0] = (resultadoTemp[1]<<16)|resultadoTemp[0]
-                                    elif parameters[parameter][2] == 5:
-                                        resultado = masterTCP.execute(meter['id'], cst.READ_HOLDING_REGISTERS, parameters[parameter][0], parameters[parameter][1], data_format='>I')
-                                    elif parameters[parameter][2] == 6:
-                                        resultado = masterTCP.execute(meter['id'], cst.READ_HOLDING_REGISTERS, parameters[parameter][0], parameters[parameter][1], data_format='>L')
-                                    elif parameters[parameter][2] == 7:
-                                        resultadoTemp = masterRTU.execute(meter['id'], cst.READ_HOLDING_REGISTERS, parameters[parameter][0], parameters[parameter][1])
-                                        resultado = [0,0]
-                                        resultado[0] = struct.unpack('f', struct.pack('I', (resultadoTemp[1]<<16)|resultadoTemp[0]))[0]
-                                elif meter['function'] == 4:
-                                    if parameters[parameter][2] == 1:
-                                        resultado = masterTCP.execute(meter['id'], cst.READ_INPUT_REGISTERS, parameters[parameter][0], parameters[parameter][1], data_format='>f')
-                                    elif parameters[parameter][2] == 2:
-                                        resultado = masterTCP.execute(meter['id'], cst.READ_INPUT_REGISTERS, parameters[parameter][0], parameters[parameter][1], data_format='>l')
-                                    elif parameters[parameter][2] == 3:
-                                        resultado = masterTCP.execute(meter['id'], cst.READ_INPUT_REGISTERS, parameters[parameter][0], parameters[parameter][1])
-                                    elif parameters[parameter][2] == 4:
-                                        resultadoTemp = masterTCP.execute(meter['id'], cst.READ_INPUT_REGISTERS, parameters[parameter][0], parameters[parameter][1])
-                                        resultado = [0,0]
-                                        resultado[0] = (resultadoTemp[1]<<16)|resultadoTemp[0]
-                                    elif parameters[parameter][2] == 5:
-                                        resultado = masterTCP.execute(meter['id'], cst.READ_INPUT_REGISTERS, parameters[parameter][0], parameters[parameter][1], data_format='>I')
-                                    elif parameters[parameter][2] == 6:
-                                        resultado = masterTCP.execute(meter['id'], cst.READ_INPUT_REGISTERS, parameters[parameter][0], parameters[parameter][1], data_format='>L')
-                                    elif parameters[parameter][2] == 7:
-                                        resultadoTemp = masterRTU.execute(meter['id'], cst.READ_INPUT_REGISTERS, parameters[parameter][0], parameters[parameter][1])
-                                        resultado = [0,0]
-                                        resultado[0] = struct.unpack('f', struct.pack('I', (resultadoTemp[1]<<16)|resultadoTemp[0]))[0]
-                                datas[list][parameter] = resultado[0]
-                                retries = 0
-                                pass
-                            except ValueError as ve:
-                                log.warning('Value Error while reading register {} from meter {}. Retries left {}.'
-                                       .format(parameters[parameter], meter['id'], retries))
-                                log.error(ve)
-#                                if retries == 0:
-#                                    raise RuntimeError
-                            except TypeError as te:
-                                log.warning('Type Error while reading register {} from meter {}. Retries left {}.'
-                                       .format(parameters[parameter], meter['id'], retries))
-                                log.error(te)
-#                                if retries == 0:
-#                                    raise RuntimeError
-                            except IOError as ie:
-                                log.warning('IO Error while reading register {} from meter {}. Retries left {}.'
-                                       .format(parameters[parameter], meter['id'], retries))
-                                log.error(ie)
-#                                if retries == 0:
-#                                    raise RuntimeError
-                            except:
-                                log.error("Unexpected error:", sys.exc_info()[0])
-#                                raise
-
-                    datas[list]['ReadTime'] =  time.time() - start_time
-                    del masterTCP;
-            except modbus_tk.modbus.ModbusError as exc:
-                log.error("%s- Code=%d", exc, exc.get_exception_code())
-
-
-        json_body = [
-            {
-                'measurement': meter_id_name[meter_id],
-                'tags': {
-                    'id': meter_slave_id[meter_id],
-                    'meter': meter_id_name[meter_id],
-                },
-                'time': t_str,
-                'fields': datas[meter_id]
-            }
-            for meter_id in datas
-        ]
-        
+            except Exception as e:
+                log.error(f"Failed meter {meter.get('name','?')} (ID {meter['id']}): {e}")
+                
+                
         if len(json_body) > 0:
 
 #            log.debug(json_body)
@@ -298,63 +175,76 @@ class DataCollector:
                         self.influx_inteval_save[list] = self.influx_inteval_save[list] - 1
         else:
             log.warning(t_str, 'No data sent.')
+            
+            
+        # Write to InfluxDB
+        if datas:
+            json_body = [
+                {
+                    "measurement": meter_id_name[i],
+                    "tags": {"id": str(meter_slave_id[i])},
+                    "time": t_utc,
+                    "fields": {k: float(v) if isinstance(v, (int,float)) and v is not None else 0.0
+                               for k, v in datas[i].items() if k != 'ReadTime'}
+                }
+                for i in datas
+            ]
+
+            if json_body:
+                for n, cfg in enumerate(influx_cfgs, 1):
+                    if self.influx_interval_save.get(n, 0) <= 1:
+                        self.influx_interval_save[n] = cfg['interval']
+                        
+                        try:  
+                            DBclient = InfluxDBClient(cfg['host'],
+                                                    cfg['port'],
+                                                    cfg['user'],
+                                                    cfg['password'],
+                                                    cfg['dbname'])
+                            DBclient.write_points(json_body)
+                           
+                        except Exception as e:
+                            log.error(f"Influx write error ({cfg['name']}): {e}")
+                    else:
+                        self.influx_interval_save[n] -= 1
 
 
-def repeat(interval_sec, max_iter, func, *args, **kwargs):
-    from itertools import count
+def repeat(interval_sec, func):
     import time
-    starttime = time.time()
-    for i in count():
-        if interval_sec > 0:
-            time.sleep(interval_sec - ((time.time() - starttime) % interval_sec))
-        if i % 1000 == 0:
-            log.info('Collected %d readouts' % i)
+    next_time = time.time()
+    counter = 0
+    while True:
         try:
-            func(*args, **kwargs)
-        except Exception as ex:
-            log.error(ex)
-        if max_iter and i >= max_iter:
-            return
+            func()
+        except Exception as e:
+            log.exception(f"Unhandled exception: {e}")
+
+        counter += 1
+        if counter % 100 == 0:
+            log.info(f"Ran {counter} cycles")
+
+        next_time += interval_sec
+        sleep_time = next_time - time.time()
+        if sleep_time > 0:
+            time.sleep(sleep_time)
 
 
 if __name__ == '__main__':
-
     import argparse
-
     parser = argparse.ArgumentParser()
-    parser.add_argument('--interval', default=60,
-                        help='Meter readout interval (seconds), default 60')
-    parser.add_argument('--meters', default='meters.yml',
-                        help='YAML file containing Meter ID, name, type etc. Default "meters.yml"')
-    parser.add_argument('--influxdb', default='influx_config.yml',
-                        help='YAML file containing Influx Host, port, user etc. Default "influx_config.yml"')
-    parser.add_argument('--log', default='CRITICAL',
-                        help='Log levels, DEBUG, INFO, WARNING, ERROR or CRITICAL')
-    parser.add_argument('--logfile', default='',
-                        help='Specify log file, if not specified the log is streamed to console')
+    parser.add_argument('--interval', type=int, default=60)
+    parser.add_argument('--meters', default='meters.yml')
+    parser.add_argument('--influxdb', default='influx_config.yml')
+    parser.add_argument('--log', default='INFO',
+                        choices=['DEBUG','INFO','WARNING','ERROR','CRITICAL'])
+    parser.add_argument('--logfile', default='')
     args = parser.parse_args()
-    interval = int(args.interval)
-    loglevel = args.log.upper()
-    logfile = args.logfile
 
-    # Setup logging
-    log = logging.getLogger('energy-logger')
-    log.setLevel(getattr(logging, loglevel))
+    log.setLevel(getattr(logging, args.log.upper()))
+    handler = logging.FileHandler(args.logfile) if args.logfile else logging.StreamHandler()
+    handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    log.addHandler(handler)
 
-    if logfile:
-        loghandle = logging.FileHandler(logfile, 'w')
-        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-        loghandle.setFormatter(formatter)
-    else:
-        loghandle = logging.StreamHandler()
-
-    log.addHandler(loghandle)
-
-    log.info('Started app')
-
-    collector = DataCollector(influx_yaml=args.influxdb,
-                              meter_yaml=args.meters)
-
-    repeat(interval,
-           max_iter=collector.max_iterations,
-           func=lambda: collector.collect_and_store())
+    log.info('Energy meter logger started')
+    collector = DataCollector(influx_yaml=args.influxdb, meter_yaml=args.meters)
+    repeat(interval_sec=args.interval, func=collector.collect_and_store)
