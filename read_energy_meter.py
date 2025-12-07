@@ -146,36 +146,6 @@ class DataCollector:
             except Exception as e:
                 log.error(f"Failed meter {meter.get('name','?')} (ID {meter['id']}): {e}")
                 
-                
-        if len(json_body) > 0:
-
-#            log.debug(json_body)
-
-            list = 0
-
-            for influx_config in influxdb:
-                list = list + 1
-                if self.influx_inteval_save[list] > 0:
-                    if self.influx_inteval_save[list] <= 1:
-                        self.influx_inteval_save[list] = influx_config['interval']
-
-                        DBclient = InfluxDBClient(influx_config['host'],
-                                                influx_config['port'],
-                                                influx_config['user'],
-                                                influx_config['password'],
-                                                influx_config['dbname'])
-                        try:
-                            DBclient.write_points(json_body)
-                            log.info(t_str + ' Data written for %d meters in {}.' .format(influx_config['name']) % len(json_body) )
-                        except Exception as e:
-                            log.error('Data not written! in {}' .format(influx_config['name']))
-                            log.error(e)
-                            raise
-                    else:
-                        self.influx_inteval_save[list] = self.influx_inteval_save[list] - 1
-        else:
-            log.warning(t_str, 'No data sent.')
-            
             
         # Write to InfluxDB
         if datas:
